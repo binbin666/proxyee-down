@@ -7,8 +7,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.Stack;
 import java.util.UUID;
@@ -22,6 +27,14 @@ public class FileUtil {
    */
   public static boolean exists(String path) {
     return new File(path).exists();
+  }
+
+  /**
+   * 文件是否存在
+   */
+  public static boolean existsFile(String path) {
+    File file = new File(path);
+    return file.exists() && file.isFile();
   }
 
   /**
@@ -268,6 +281,41 @@ public class FileUtil {
           }
         }
       }
+    }
+  }
+
+  /**
+   * 判断文件存在是重命名
+   */
+  public static String renameIfExists(String path) {
+    File file = new File(path);
+    if (file.exists() && file.isFile()) {
+      int index = file.getName().lastIndexOf(".");
+      String name = file.getName().substring(0, index);
+      String suffix = index == -1 ? "" : file.getName().substring(index);
+      int i = 1;
+      String newName;
+      do {
+        newName = name + "(" + i + ")" + suffix;
+        i++;
+      }
+      while (existsFile(file.getParent() + File.separator + newName));
+      return newName;
+    }
+    return file.getName();
+  }
+
+  /**
+   * 创建指定大小的Sparse File
+   */
+  public static void createSparseFile(String filePath, long length) throws IOException {
+    Path path = Paths.get(filePath);
+    Files.deleteIfExists(path);
+    try (
+        SeekableByteChannel channel = Files.newByteChannel(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, StandardOpenOption.SPARSE)
+    ) {
+      channel.position(length - 1);
+      channel.write(ByteBuffer.wrap(new byte[]{0}));
     }
   }
 }

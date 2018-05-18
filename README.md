@@ -20,12 +20,12 @@
 当任务下载链接失效了，下载没速度或失败则可以使用刷新下载链接的功能，使用新的链接继续下载，具体请[查看](https://github.com/monkeyWie/proxyee-down/blob/master/.guide/common/refresh/read.md)。
 ### 百度云破解
 #### 2018-03-29更新  
-百度云近期对**批量下载**的并发连接数做了限制，分段数需要建议不要超过64，否则可能会导致任务下载失败或下载速度慢。
+百度云近期对**批量下载**的并发连接数做了限制，如果选择的文件里包含文件夹，分段数需要建议不要超过64，否则可能会导致任务下载失败或下载速度慢。
 #### 功能介绍
 百度云大文件、合并下载限制突破,成功安装下载器后，打开百度云页面会有如下提示，然后在选择文件后点击下载按钮即可调用proxyee-down下载    
 ![百度云破解](https://github.com/monkeyWie/proxyee-down/raw/master/.guide/common/bdy-hook.png)
 ### 百度云解压工具
-在下载器工具页面里进入百度云解压工具，选择百度云批量下载的文件进行解压  
+由于百度批量下载的zip压缩包不是zip64格式，在压缩包里有超过4G文件的时候普通的解压工具并不能正确的识别文件大小从而导致压缩失败，遇到这种情况时可以在下载器左侧**工具**栏目里找到百度云解压工具进行解压 
 ![百度云解压](https://github.com/monkeyWie/proxyee-down/raw/master/.guide/common/bdy-unzip.png)
 ## 其他
 ### SwitchyOmega插件安装与设置
@@ -35,12 +35,9 @@
 ### 开放接口
 [查看](https://github.com/monkeyWie/proxyee-down/blob/master/.guide/common/api/read.md)
 ### QQ群
-1群**11352304**(已满)、2群**20236964**(已满)、3群**20233754**
+1群**11352304**、2群**20236964**、3群**20233754**、4群**737991056**
 ### 支持
 感谢 [惶心|技术博客](https://tech.hxco.de) 提供下载服务
-## 联系作者
-- QQ:263397478
-- 准备换工作啦，有需要招人或者内推的小伙伴欢迎联系我~
 # 开发
 本项目依赖[proxyee](https://github.com/monkeyWie/proxyee)，因为还没上传maven中央仓库，需自行编译打包至本地仓库。  
 导入IDE里时需要安装lombok插件。

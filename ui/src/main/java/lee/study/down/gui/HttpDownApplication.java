@@ -9,6 +9,7 @@ import java.awt.PopupMenu;
 import java.awt.SystemTray;
 import java.awt.Toolkit;
 import java.awt.TrayIcon;
+import java.awt.TrayIcon.MessageType;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
@@ -20,16 +21,27 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.beans.value.ChangeListener;
-import javafx.beans.value.ObservableValue;
 import javafx.geometry.HPos;
+import javafx.geometry.Insets;
 import javafx.geometry.Rectangle2D;
 import javafx.geometry.VPos;
+import javafx.scene.Group;
 import javafx.scene.Scene;
+import javafx.scene.control.Alert;
+import javafx.scene.control.Alert.AlertType;
+import javafx.scene.control.ButtonBase;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.DialogPane;
 import javafx.scene.image.Image;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.DataFormat;
+import javafx.scene.input.MouseButton;
 import javafx.scene.layout.Region;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
+import javafx.stage.Modality;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javax.swing.JOptionPane;
@@ -39,8 +51,13 @@ import lee.study.down.ca.HttpDownProxyCACertFactory;
 import lee.study.down.constant.HttpDownConstant;
 import lee.study.down.content.ContentManager;
 import lee.study.down.intercept.HttpDownHandleInterceptFactory;
+import lee.study.down.model.ConfigBaseInfo;
 import lee.study.down.model.ConfigInfo;
+import lee.study.down.model.ResultInfo;
+import lee.study.down.model.ResultInfo.ResultStatus;
 import lee.study.down.mvc.HttpDownSpringBoot;
+import lee.study.down.mvc.controller.HttpDownController;
+import lee.study.down.mvc.form.NewTaskForm;
 import lee.study.down.plug.PluginContent;
 import lee.study.down.task.HttpDownProgressEventTask;
 import lee.study.down.task.PluginUpdateCheckTask;
@@ -62,6 +79,7 @@ public class HttpDownApplication extends Application {
   private float version;
   private Stage stage;
   private Browser browser;
+  private TrayIcon trayIcon;
 
   private static HttpDownProxyServer proxyServer;
 
@@ -121,68 +139,6 @@ public class HttpDownApplication extends Application {
   }
 
   private void afterTrayInit() {
-    try {
-      //根证书生成
-      if (!FileUtil.exists(HttpDownConstant.CA_PRI_PATH)
-          || !FileUtil.exists(HttpDownConstant.CA_CERT_PATH)) {
-        //生成ca证书和私钥
-        KeyPair keyPair = CertUtil.genKeyPair();
-        File priKeyFile = FileUtil.createFile(HttpDownConstant.CA_PRI_PATH, true);
-        File caCertFile = FileUtil.createFile(HttpDownConstant.CA_CERT_PATH, false);
-        Files.write(Paths.get(priKeyFile.toURI()), keyPair.getPrivate().getEncoded());
-        Files.write(Paths.get(caCertFile.toURI()),
-            CertUtil.genCACert(
-                "C=CN, ST=GD, L=SZ, O=lee, OU=study, CN=" + HttpDownConstant.CA_SUBJECT,
-                new Date(),
-                new Date(System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3650)),
-                keyPair)
-                .getEncoded());
-      }
-      //启动检查证书安装
-      if (ContentManager.CONFIG.get().isCheckCa() &&
-          !OsUtil.existsCert(HttpDownConstant.CA_SUBJECT,
-              ByteUtil.getCertHash(CertUtil.loadCert(HttpDownConstant.CA_CERT_PATH)))) {
-        if (OsUtil.existsCert(HttpDownConstant.CA_SUBJECT)) {
-          //重新生成卸载之前的证书
-          if (OsUtil.isWindows() && OsUtil
-              .existsWindowsCert(HttpDownConstant.CA_SUBJECT, false)) { //admin权限静默卸载
-            showMsg("检测到系统存在旧的证书，请按确定再根据引导进行删除");
-          }
-          OsUtil.uninstallCert(HttpDownConstant.CA_SUBJECT);
-        }
-        if (OsUtil.isWindows() && !OsUtil.isAdmin()) { //admin权限静默安装
-          showMsg("需要安装新证书，请按确定再引导进行安装");
-        }
-        OsUtil.installCert(HttpDownConstant.CA_CERT_PATH);
-      }
-    } catch (Exception e) {
-      ContentManager.CONFIG.get().setCheckCa(false);
-      ContentManager.CONFIG.save();
-      showMsg("证书安装失败，请手动安装");
-      LOGGER.error("cert handle error", e);
-    }
-
-    //嗅探代理服务器启动
-    proxyServer = new HttpDownProxyServer(
-        new HttpDownProxyCACertFactory(HttpDownConstant.CA_CERT_PATH, HttpDownConstant.CA_PRI_PATH),
-        ContentManager.CONFIG.get().getSecProxyConfig(),
-        new HttpDownHandleInterceptFactory(httpDownInfo -> Platform.runLater(() -> {
-          if (ContentManager.CONFIG.get().getUiModel() == 1) {
-            String taskId = httpDownInfo.getTaskInfo().getId();
-            browser.webEngine.executeScript("vue.$children[0].openTabHandle('/tasks');"
-                + "vue.$store.commit('tasks/setNewTaskId','" + taskId + "');"
-                + "vue.$store.commit('tasks/setNewTaskStatus',2);");
-          }
-          open(false);
-        }))
-    );
-    int sniffProxyPort = ContentManager.CONFIG.get().getProxyPort();
-    if (OsUtil.isBusyPort(sniffProxyPort)) {
-      showMsg("端口(" + sniffProxyPort + ")被占用，请关闭占用端口的软件或设置新的端口号");
-    } else {
-      new Thread(() -> proxyServer.start(ContentManager.CONFIG.get().getProxyPort())).start();
-    }
-
     //启动线程
     new HttpDownProgressEventTask().start();
     new PluginUpdateCheckTask().start();
@@ -215,8 +171,108 @@ public class HttpDownApplication extends Application {
       event.consume();
       close();
     });
+    //检查证书安装情况
+    checkCa();
+    //开启代理服务器
+    startSniffProxy();
+    //启动时是否打开窗口
+    if (ContentManager.CONFIG.get().isAutoOpen()) {
+      open(false);
+    }
   }
 
+  private void checkCa() {
+    try {
+      //根证书生成
+      if (!FileUtil.exists(HttpDownConstant.CA_PRI_PATH)
+          || !FileUtil.exists(HttpDownConstant.CA_CERT_PATH)) {
+        //生成ca证书和私钥
+        KeyPair keyPair = CertUtil.genKeyPair();
+        File priKeyFile = FileUtil.createFile(HttpDownConstant.CA_PRI_PATH, true);
+        File caCertFile = FileUtil.createFile(HttpDownConstant.CA_CERT_PATH, false);
+        Files.write(Paths.get(priKeyFile.toURI()), keyPair.getPrivate().getEncoded());
+        Files.write(Paths.get(caCertFile.toURI()),
+            CertUtil.genCACert(
+                "C=CN, ST=GD, L=SZ, O=lee, OU=study, CN=" + HttpDownConstant.CA_SUBJECT,
+                new Date(),
+                new Date(System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3650)),
+                keyPair)
+                .getEncoded());
+      }
+      //启动检查证书安装
+      if (ContentManager.CONFIG.get().isCheckCa()
+          && !OsUtil.existsCert(HttpDownConstant.CA_SUBJECT,
+          ByteUtil.getCertHash(CertUtil.loadCert(HttpDownConstant.CA_CERT_PATH)))) {
+        if (OsUtil.existsCert(HttpDownConstant.CA_SUBJECT)) {
+          //重新生成卸载之前的证书
+          if (OsUtil.isWindows() && OsUtil
+              .existsWindowsCert(HttpDownConstant.CA_SUBJECT, false)) { //admin权限静默卸载
+            showMsg("检测到系统存在旧的证书，请按确定再根据引导进行删除");
+          }
+          OsUtil.uninstallCert(HttpDownConstant.CA_SUBJECT);
+        }
+        if (OsUtil.isWindows() && !OsUtil.isAdmin()) { //admin权限静默安装
+          showMsg("需要安装新证书，请按确定再引导进行安装");
+        }
+        OsUtil.installCert(HttpDownConstant.CA_CERT_PATH);
+      }
+    } catch (Exception e) {
+      ContentManager.CONFIG.get().setCheckCa(false);
+      ContentManager.CONFIG.save();
+      showMsg("证书安装失败，请手动安装");
+      LOGGER.error("cert handle error", e);
+    }
+  }
+
+  private void startSniffProxy() {
+    //嗅探代理服务器启动
+    proxyServer = new HttpDownProxyServer(
+        new HttpDownProxyCACertFactory(HttpDownConstant.CA_CERT_PATH, HttpDownConstant.CA_PRI_PATH),
+        ContentManager.CONFIG.get().getSecProxyConfig(),
+        new HttpDownHandleInterceptFactory(httpDownInfo -> Platform.runLater(() -> {
+          ConfigBaseInfo configInfo = ContentManager.CONFIG.get();
+          //自动开始下载
+          if (configInfo.isAutoDown()) {
+            NewTaskForm newTaskForm = new NewTaskForm();
+            newTaskForm.setId(httpDownInfo.getTaskInfo().getId());
+            newTaskForm.setFilePath(configInfo.getAutoDownPath());
+            newTaskForm.setFileName(FileUtil.renameIfExists(configInfo.getAutoDownPath() + File.separator + httpDownInfo.getTaskInfo().getFileName()));
+            newTaskForm.setUnzip(true);
+            try {
+              ResultInfo resultInfo = HttpDownController.commonStartTask(newTaskForm);
+              if (resultInfo.getStatus() == ResultStatus.SUCC.getCode()) {
+                trayIcon.displayMessage("提示", "新任务【" + newTaskForm.getFileName() + "】开始自动下载", TrayIcon.MessageType.INFO);
+              } else {
+                trayIcon.displayMessage("提示", "自动下载失败：" + resultInfo.getMsg(), MessageType.ERROR);
+              }
+            } catch (Exception e) {
+              LOGGER.error("auto start error", e);
+              trayIcon.displayMessage("提示", "自动下载失败：" + e.getMessage(), MessageType.ERROR);
+            }
+          } else {
+            if (configInfo.getUiModel() == 1) {
+              String taskId = httpDownInfo.getTaskInfo().getId();
+              browser.webEngine.executeScript("vue.$children[0].openTabHandle('/tasks');"
+                  + "vue.$store.commit('tasks/setNewTaskId','" + taskId + "');"
+                  + "vue.$store.commit('tasks/setNewTaskStatus',2);");
+            }
+            open(false);
+          }
+        }))
+    );
+    int sniffProxyPort = ContentManager.CONFIG.get().getProxyPort();
+    if (OsUtil.isBusyPort(sniffProxyPort)) {
+      showMsg("端口(" + sniffProxyPort + ")被占用，请勿重复启动本软件！若无重复启动，请关闭占用端口的软件或设置新的端口号");
+    } else {
+      new Thread(() -> proxyServer.start(ContentManager.CONFIG.get().getProxyPort())).start();
+    }
+  }
+
+  /**
+   * 打开下载器界面
+   *
+   * @param isTray 是否由托盘菜单发起
+   */
   public void open(boolean isTray) {
     if (browser == null || ContentManager.CONFIG.get().getUiModel() == 2) {
       try {
@@ -251,7 +307,28 @@ public class HttpDownApplication extends Application {
   }
 
   private void showMsg(String msg) {
-    JOptionPane.showMessageDialog(null, msg, "提示", JOptionPane.WARNING_MESSAGE);
+    Alert alert = new Alert(AlertType.INFORMATION);
+    alert.setTitle("提示");
+    alert.setHeaderText(null);
+    alert.setContentText(msg);
+
+    DialogPane root = alert.getDialogPane();
+    Stage dialogStage = new Stage();
+
+    for (ButtonType buttonType : root.getButtonTypes()) {
+      ButtonBase button = (ButtonBase) root.lookupButton(buttonType);
+      button.setOnAction(evt -> dialogStage.close());
+    }
+
+    root.getScene().setRoot(new Group());
+    root.setPadding(new Insets(10, 0, 10, 0));
+
+    Scene scene = new Scene(root);
+    dialogStage.setScene(scene);
+    dialogStage.initModality(Modality.APPLICATION_MODAL);
+    dialogStage.setAlwaysOnTop(true);
+    dialogStage.setResizable(false);
+    dialogStage.showAndWait();
   }
 
   private void addTray() {
@@ -261,7 +338,7 @@ public class HttpDownApplication extends Application {
         SystemTray systemTray = SystemTray.getSystemTray();
         // 获取图片所在的URL
         URL url = Thread.currentThread().getContextClassLoader().getResource("favicon.png");
-        TrayIcon trayIcon = new TrayIcon(Toolkit.getDefaultToolkit().getImage(url), "proxyee-down");
+        trayIcon = new TrayIcon(Toolkit.getDefaultToolkit().getImage(url), "proxyee-down");
         // 为系统托盘加托盘图标
         systemTray.add(trayIcon);
         trayIcon.setImageAutoSize(true);
@@ -441,19 +518,50 @@ public class HttpDownApplication extends Application {
 
   class Browser extends Region {
 
-    final WebView browser = new WebView();
-    final WebEngine webEngine = browser.getEngine();
+    final WebView webView = new WebView();
+    final WebEngine webEngine = webView.getEngine();
 
     public Browser() {
-      getChildren().add(browser);
-      browser.setContextMenuEnabled(false);
+      getChildren().add(webView);
+      webView.setContextMenuEnabled(false);
+      //自定义webview右键菜单
+      final Clipboard clipboard = Clipboard.getSystemClipboard();
+      ContextMenu contextMenu = new ContextMenu();
+      javafx.scene.control.MenuItem copy = new javafx.scene.control.MenuItem("复制");
+      copy.setOnAction(e -> {
+        ClipboardContent content = new ClipboardContent();
+        Object selection = webView.getEngine().executeScript("window.getSelection().toString()");
+        if (selection != null) {
+          content.putString(selection.toString());
+          clipboard.setContent(content);
+        }
+      });
+      javafx.scene.control.MenuItem paste = new javafx.scene.control.MenuItem("粘帖");
+      paste.setOnAction(e -> {
+        Object content = clipboard.getContent(DataFormat.PLAIN_TEXT);
+        if (content != null) {
+          webView.getEngine().executeScript("if(document.activeElement.nodeName.toUpperCase()=='INPUT'){"
+              + "document.activeElement.value='" + content + "';"
+              + "var event = document.createEvent('Event');"
+              + "event.initEvent('input', true, true);"
+              + "document.activeElement.dispatchEvent(event);}");
+        }
+      });
+      contextMenu.getItems().addAll(copy, paste);
+      webView.setOnMousePressed(e -> {
+        if (e.getButton() == MouseButton.SECONDARY) {
+          contextMenu.show(webView, e.getScreenX(), e.getScreenY());
+        } else {
+          contextMenu.hide();
+        }
+      });
     }
 
     @Override
     protected void layoutChildren() {
       double w = getWidth();
       double h = getHeight();
-      layoutInArea(browser, 0, 0, w, h, 0, HPos.CENTER, VPos.CENTER);
+      layoutInArea(webView, 0, 0, w, h, 0, HPos.CENTER, VPos.CENTER);
     }
 
     public void load(String url) {
